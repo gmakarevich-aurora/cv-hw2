@@ -19,9 +19,29 @@ Returns:
         four possible transformations
 '''
 def estimate_initial_RT(E):
-    # TODO: Implement this method!
-    raise Exception('Not Implemented Error')
+    W = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    #print ("W\n", W)
+    U, S, V = np.linalg.svd(E)
+    Q1 = np.dot(U, np.dot(W, V))
+    Q2 = np.dot(U, np.dot(W.T, V))
+    R1 = np.linalg.det(Q1) * Q1
+    R2 = np.linalg.det(Q2) * Q2
+    
+    #print ("R1\n", R1)
+    #print ("R2\n", R2)
+    
+    #print ("U\n", U)
+    T1 = U[:, 2]
+    #print ("T1\n", T1)
+    T2 = -1 * T1
+    
+    RT = np.zeros((4, 3, 4))
+    RT[0, :, :] = np.concatenate((R1, np.reshape(T1, (3, 1))), axis = 1)
+    RT[1, :, :] = np.concatenate((R1, np.reshape(T2, (3, 1))), axis = 1)
+    RT[2, :, :] = np.concatenate((R2, np.reshape(T1, (3, 1))), axis = 1)
+    RT[3, :, :] = np.concatenate((R2, np.reshape(T2, (3, 1))), axis = 1)
 
+    return RT
 '''
 LINEAR_ESTIMATE_3D_POINT given a corresponding points in different images,
 compute the 3D point is the best linear estimate
@@ -32,8 +52,19 @@ Returns:
     point_3d - the 3D point
 '''
 def linear_estimate_3d_point(image_points, camera_matrices):
-    # TODO: Implement this method!
-    raise Exception('Not Implemented Error')
+    #print ("Image points\n", image_points)
+    #print ("camera_matrices\n", camera_matrices)
+    A = np.zeros((2 * image_points.shape[0], 4))
+    for idx in range(0, image_points.shape[0]):
+        A[2*idx, :] = image_points[idx][0] * camera_matrices[idx, 2, :] - camera_matrices[idx, 0, :]
+        A[2*idx + 1, :] = image_points[idx][1] * camera_matrices[idx, 2, :] - camera_matrices[idx, 1, :]
+        
+    #print ("A\n", A)
+    U, S, V = np.linalg.svd(A)
+    #print ("V\n", V)
+    #print (V[-1, :])
+    p3d = V[-1, [0, 1, 2]] / V[-1, 3]
+    return p3d
 
 '''
 REPROJECTION_ERROR given a 3D point and its corresponding points in the image
@@ -46,8 +77,16 @@ Returns:
     error - the 2Mx1 reprojection error vector
 '''
 def reprojection_error(point_3d, image_points, camera_matrices):
-    # TODO: Implement this method!
-    raise Exception('Not Implemented Error')
+    point_3d_hg = np.append(point_3d, [1])
+    # print ("point_3d_hg\n", point_3d_hg)
+    error = np.zeros(2 * camera_matrices.shape[0])
+    for idx in range(0, image_points.shape[0]):
+        p = np.dot(camera_matrices[idx], point_3d_hg)
+        # print ("p\n", p)
+        error[2*idx] = p[0]/p[2] - image_points[idx][0]
+        error[2*idx + 1] = p[1]/p[2] - image_points[idx][1]
+    # print ("error\n", error)
+    return error
 
 '''
 JACOBIAN given a 3D point and its corresponding points in the image
@@ -59,8 +98,25 @@ Returns:
     jacobian - the 2Mx3 Jacobian matrix
 '''
 def jacobian(point_3d, camera_matrices):
-    # TODO: Implement this method!
-    raise Exception('Not Implemented Error')
+    point_3d_hg = np.append(point_3d, [1])
+    jacobian_m = np.zeros((2 * camera_matrices.shape[0], 3))
+    for idx in range(0, camera_matrices.shape[0]):
+        p = np.dot(camera_matrices[idx], point_3d_hg)
+        
+        M = camera_matrices[idx]
+        div = math.pow(p[2], 2)
+        jacobian_m[2*idx] = np.array([
+            M[0][0] * p[2] - p[0] * M[2][0],
+            M[0][1] * p[2] - p[0] * M[2][1],
+            M[0][2] * p[2] - p[0] * M[2][2]
+        ])/div
+        jacobian_m[2*idx + 1] = np.array([
+            M[1][0] * p[2] - p[1] * M[2][0],
+            M[1][1] * p[2] - p[1] * M[2][1],
+            M[1][2] * p[2] - p[1] * M[2][2]
+        ])/div
+    
+    return jacobian_m
 
 '''
 NONLINEAR_ESTIMATE_3D_POINT given a corresponding points in different images,
@@ -72,8 +128,12 @@ Returns:
     point_3d - the 3D point
 '''
 def nonlinear_estimate_3d_point(image_points, camera_matrices):
-    # TODO: Implement this method!
-    raise Exception('Not Implemented Error')
+    p_estimate = linear_estimate_3d_point(image_points, camera_matrices)
+    for it in range(0, 10):
+        jacobian_m = jacobian(p_estimate, camera_matrices)
+        error = reprojection_error(p_estimate, image_points, camera_matrices)
+        p_estimate = p_estimate - np.linalg.inv(jacobian_m.T.dot(jacobian_m)).dot(jacobian_m.T).dot(error)
+    return p_estimate
 
 '''
 ESTIMATE_RT_FROM_E from the Essential Matrix, we can compute  the relative RT 
@@ -87,8 +147,35 @@ Returns:
         two cameras
 '''
 def estimate_RT_from_E(E, image_points, K):
-    # TODO: Implement this method!
-    raise Exception('Not Implemented Error')
+    RT_estimates = estimate_initial_RT(E)
+    camera_matrices = np.zeros((2, 3, 4))
+    identity = np.concatenate((np.eye(3, 3), np.zeros((3, 1))), axis = 1)
+    # print ("identity\n", identity)
+    camera_matrices[0] = K.dot(identity)
+    
+    point_3d_estimate = np.zeros((RT_estimates.shape[0], image_points.shape[0], 3))
+    
+    good_points = np.zeros((RT_estimates.shape[0], 1))
+    
+    for rt_idx in range(0, RT_estimates.shape[0]):
+        camera_matrices[1] = K.dot(RT_estimates[rt_idx])
+        for p_idx in range(0, image_points.shape[0]):
+                p_estimate = nonlinear_estimate_3d_point(image_points[p_idx], camera_matrices)
+                point_3d_estimate[rt_idx][p_idx] = p_estimate
+                # print ("p_estimate\n", p_estimate)
+                if p_estimate[2] > 0:
+                    p_estimate_hg = np.append(p_estimate, [1])
+                    p_estimate_matrix_2 = RT_estimates[rt_idx].dot(p_estimate_hg)
+                    # print ("p_estimate_matrix_2\n", p_estimate_matrix_2)
+                    if p_estimate_matrix_2[2] > 0:
+                        good_points[rt_idx][0] = good_points[rt_idx][0] + 1
+                    
+    best_idx = 0
+    for rt_idx in range(0, good_points.shape[0]):
+        if good_points[rt_idx][0] > good_points[best_idx][0]:
+            best_idx = rt_idx
+    
+    return RT_estimates[best_idx]
 
 if __name__ == '__main__':
     run_pipeline = True
